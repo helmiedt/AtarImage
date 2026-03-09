@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>MindAR Target Compiler</title>
+
+  <!-- MindAR compiler (runs 100% in browser, no server needed) -->
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 520px;
+      width: 90%;
+      text-align: center;
+    }
+    h1 { font-size: 22px; margin-bottom: 8px; color: #fff; }
+    .sub { font-size: 14px; color: #888; margin-bottom: 32px; }
+
+    .drop-zone {
+      border: 2px dashed #3a3a3a;
+      border-radius: 12px;
+      padding: 36px 20px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      margin-bottom: 24px;
+      position: relative;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: #5577ff;
+      background: rgba(85,119,255,0.05);
+    }
+    .drop-zone input {
+      position: absolute; inset: 0;
+      opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-zone .icon { font-size: 40px; margin-bottom: 10px; }
+    .drop-zone p { font-size: 14px; color: #888; }
+    .drop-zone p span { color: #5577ff; }
+
+    #preview { display: none; max-width: 200px; border-radius: 8px; margin: 0 auto 16px; }
+
+    #compile-btn {
+      background: #5577ff;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 14px 32px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      transition: background 0.2s;
+      display: none;
+    }
+    #compile-btn:hover { background: #4466ee; }
+    #compile-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+
+    #status {
+      margin-top: 20px;
+      font-size: 14px;
+      color: #888;
+      min-height: 24px;
+    }
+    #status.ok { color: #4caf50; }
+    #status.err { color: #f44336; }
+
+    .progress-bar {
+      height: 4px;
+      background: #2a2a2a;
+      border-radius: 2px;
+      margin-top: 12px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #5577ff;
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    .steps {
+      margin-top: 32px;
+      text-align: left;
+      border-top: 1px solid #2a2a2a;
+      padding-top: 24px;
+    }
+    .steps h3 { font-size: 13px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    .steps ol { padding-left: 20px; }
+    .steps li { font-size: 13px; color: #888; margin-bottom: 8px; line-height: 1.5; }
+    .steps li strong { color: #ccc; }
+    code { background: #252525; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #adf; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>🎯 MindAR Target Compiler</h1>
+  <p class="sub">Converts your image into a <code>.mind</code> file for AR tracking</p>
+
+  <img id="preview" alt="Preview">
+
+  <div class="drop-zone" id="drop-zone">
+    <input type="file" id="file-input" accept="image/*">
+    <div class="icon">🖼️</div>
+    <p>Drop <span>imgtracker.png</span> here<br>or click to browse</p>
+  </div>
+
+  <button id="compile-btn">⚙️ Compile to targets.mind</button>
+
+  <div class="progress-bar" id="progress-bar">
+    <div class="progress-fill" id="progress-fill"></div>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="steps">
+    <h3>After compiling</h3>
+    <ol>
+      <li>Save <strong>targets.mind</strong> into the <code>assets/</code> folder</li>
+      <li>Upload the whole <strong>AtarImage</strong> folder to GitHub</li>
+      <li>Enable GitHub Pages → your AR is live at<br>
+        <code>helmiedt.github.io/AtarImage/</code>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<script>
+  const fileInput   = document.getElementById('file-input');
+  const dropZone    = document.getElementById('drop-zone');
+  const preview     = document.getElementById('preview');
+  const compileBtn  = document.getElementById('compile-btn');
+  const status      = document.getElementById('status');
+  const progressBar = document.getElementById('progress-bar');
+  const progressFill= document.getElementById('progress-fill');
+
+  let selectedFile = null;
+
+  // Drag-over styling
+  dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    handleFile(e.dataTransfer.files[0]);
+  });
+
+  fileInput.addEventListener('change', () => handleFile(fileInput.files[0]));
+
+  function handleFile(file) {
+    if (!file || !file.type.startsWith('image/')) {
+      setStatus('Please select a PNG or JPG image.', 'err');
+      return;
+    }
+    selectedFile = file;
+    const url = URL.createObjectURL(file);
+    preview.src = url;
+    preview.style.display = 'block';
+    compileBtn.style.display = 'block';
+    setStatus('Ready to compile: ' + file.name);
+  }
+
+  function setStatus(msg, cls) {
+    status.textContent = msg;
+    status.className = cls || '';
+  }
+
+  compileBtn.addEventListener('click', async function () {
+    if (!selectedFile) return;
+
+    compileBtn.disabled = true;
+    progressBar.style.display = 'block';
+    setStatus('Loading image…');
+    setProgress(10);
+
+    try {
+      const img = await loadImage(selectedFile);
+      setStatus('Compiling image target (this may take 10-30 sec)…');
+      setProgress(30);
+
+      const compiler = new MINDAR.IMAGE.Compiler();
+      await compiler.compileImageTargets([img], function (progress) {
+        setProgress(30 + Math.round(progress * 60));
+      });
+
+      setProgress(95);
+      setStatus('Generating file…');
+
+      const buffer = await compiler.exportData();
+      const blob = new Blob([buffer]);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'targets.mind';
+      a.click();
+
+      setProgress(100);
+      setStatus('✅ targets.mind downloaded! Place it in the assets/ folder.', 'ok');
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'err');
+      console.error(err);
+    }
+    compileBtn.disabled = false;
+  });
+
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  function setProgress(pct) {
+    progressFill.style.width = pct + '%';
+  }
+</script>
+</body>
+</html>
